@@ -1,0 +1,20 @@
+import { Sequelize } from 'sequelize';
+import 'dotenv/config';
+
+const DB_NAME = process.env['DB_NAME'] ?? 'todo_list';
+const DB_USER = process.env['DB_USER'] ?? 'root';
+const DB_PASS = process.env['DB_PASS'] ?? '';
+const DB_HOST = process.env['DB_HOST'] ?? 'localhost';
+const DB_PORT = Number.parseInt(process.env['DB_PORT'] ?? '3306', 10);
+const DB_LOG_SQL = process.env['DB_LOG_SQL'] === 'true';
+
+export const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASS, {
+  host: DB_HOST,
+  port: DB_PORT,
+  dialect: 'mysql',
+  logging: DB_LOG_SQL ? console.log : false,
+  define: {
+    timestamps: false,
+    underscored: true,
+  },
+});

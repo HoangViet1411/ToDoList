@@ -18,8 +18,8 @@ export interface UpdateUserDto {
 
 export interface UserResponse {
   id: number;
-  firstName: string | null;
-  lastName: string | null;
+  firstName: string; // NOT NULL in database
+  lastName: string; // NOT NULL in database
   birthDate: Date | null;
   gender: Gender | null;
   createdAt: Date;

@@ -1,7 +1,7 @@
 import { Op } from 'sequelize';
 import User, { type UserAttributes, Gender } from '../models/User';
 import type { CreateUserDto, UpdateUserDto, UserResponse, PaginatedResponse } from '../types';
-
+import { sequelize } from '../config/database';
 export interface UserFilterParams {
   search?: string;
   first_name?: string;
@@ -14,9 +14,10 @@ export interface UserFilterParams {
 
 export class UserService {
   async createUser(userData: CreateUserDto): Promise<UserResponse> {
+    // Validation đã đảm bảo first_name và last_name là required và không null
     const user = await User.create({
-      firstName: userData.first_name ?? null,
-      lastName: userData.last_name ?? null,
+      firstName: userData.first_name!, // Non-null assertion vì validation đã đảm bảo
+      lastName: userData.last_name!, // Non-null assertion vì validation đã đảm bảo
       birthDate: userData.birth_date ? new Date(userData.birth_date) : null,
       gender: userData.gender ?? null,
       createdBy: userData.created_by ?? null,
@@ -38,8 +39,11 @@ export class UserService {
   ): Promise<PaginatedResponse<UserResponse>> {
     // Validate và set default values
     const pageNumber = Math.max(1, page);
-    const pageSize = Math.max(1, Math.min(100, limit)); // Max 100 records per page
-    const offset = (pageNumber - 1) * pageSize;
+    // Nếu limit=0, không áp dụng pagination (lấy tất cả)
+    const noPagination = limit === 0;
+    // Chỉ tính pageSize và offset khi có pagination
+    const pageSize = noPagination ? 0 : Math.max(1, Math.min(100, limit)); // Max 100 records per page
+    const offset = noPagination ? 0 : (pageNumber - 1) * pageSize;
 
     // Xây dựng WHERE clause cho filter
     const whereConditions: Array<Record<string, unknown>> = [];
@@ -49,6 +53,15 @@ export class UserService {
       const searchTerm = `%${filters.search.trim()}%`;
       whereConditions.push({
         [Op.or]: [
+          sequelize.where(
+            sequelize.fn('CONCAT', 
+              sequelize.col('first_name'),  
+              ' ',                           
+              sequelize.col('last_name')     
+            ),
+            { [Op.like]: searchTerm }
+          ),
+
           { firstName: { [Op.like]: searchTerm } },
           { lastName: { [Op.like]: searchTerm } },
         ],
@@ -57,16 +70,16 @@ export class UserService {
 
     // Filter by first_name (có thể kết hợp với search)
     if (filters.first_name && filters.first_name.trim()) {
-      whereConditions.push({
-        firstName: { [Op.like]: `%${filters.first_name.trim()}%` },
-      });
+      const firstNameFilter = filters.first_name.trim();
+      const firstNameCondition = { firstName: { [Op.like]: `%${firstNameFilter}%` } };
+      whereConditions.push(firstNameCondition);
     }
 
     // Filter by last_name (có thể kết hợp với search và first_name)
     if (filters.last_name && filters.last_name.trim()) {
-      whereConditions.push({
-        lastName: { [Op.like]: `%${filters.last_name.trim()}%` },
-      });
+      const lastNameFilter = filters.last_name.trim();
+      const lastNameCondition = { lastName: { [Op.like]: `%${lastNameFilter}%` } };
+      whereConditions.push(lastNameCondition);
     }
 
     // Filter by birth_date_from (từ ngày này trở đi)
@@ -111,44 +124,40 @@ export class UserService {
     const queryOptions: {
       where?: Record<string, unknown>;
       order: Array<[string, string]>;
-      limit: number;
-      offset: number;
+      limit?: number;  // Optional để có thể không set khi limit=0
+      offset?: number; // Optional để có thể không set khi limit=0
       paranoid?: boolean;
     } = {
       order: [['createdAt', 'DESC']],
-      limit: pageSize,
-      offset: offset,
       paranoid: filters.include_deleted === true ? false : true,
     };
+
+    // Nếu limit=0, không áp dụng pagination
+    // KHÔNG set limit và offset trong queryOptions → Sequelize sẽ KHÔNG thêm LIMIT vào SQL
+    // Database sẽ trả về TẤT CẢ records match với filters (không có giới hạn)
+    if (!noPagination) {
+      queryOptions.limit = pageSize;
+      queryOptions.offset = offset;
+    }
+    // Khi noPagination = true, KHÔNG set limit và offset → Sequelize không thêm LIMIT clause vào SQL
 
     // Chỉ thêm where clause nếu có filter
     if (whereClause) {
       queryOptions.where = whereClause;
     }
 
-    // Get total count với filter
-    // Nếu include_deleted = true, tắt paranoid để đếm cả deleted users
-    const countOptions: {
-      where?: Record<string, unknown>;
-      paranoid?: boolean;
-    } = whereClause ? { where: whereClause } : {};
-    
-    if (filters.include_deleted === true) {
-      countOptions.paranoid = false;
-    }
-    
-    const total = (await User.count(countOptions)) as number;
+    // Dùng findAndCountAll để lấy cả data và count trong 1 query (hiệu quả hơn)
+    const { rows: users, count: total } = await User.findAndCountAll(queryOptions);
 
-    // Get paginated users với filter (paranoid tự động filter deleted_at IS NULL)
-    const users = await User.findAll(queryOptions);
-
-    const totalPages = Math.ceil(total / pageSize);
+    // Nếu không có pagination, totalPages = 1 và limit = total
+    const totalPages = noPagination ? 1 : Math.ceil(total / pageSize);
+    const responseLimit = noPagination ? total : pageSize;
 
     return {
       data: users.map((user) => this.mapToUserResponse(user)),
       pagination: {
-        page: pageNumber,
-        limit: pageSize,
+        page: noPagination ? 1 : pageNumber,
+        limit: responseLimit,
         total,
         totalPages,
         hasNext: pageNumber < totalPages,
@@ -165,8 +174,19 @@ export class UserService {
     }
 
     const updateData: Partial<UserAttributes> = {};
-    if (userData.first_name !== undefined) updateData.firstName = userData.first_name;
-    if (userData.last_name !== undefined) updateData.lastName = userData.last_name;
+    
+    // first_name: chỉ update nếu có giá trị hợp lệ (không null, không empty)
+    // Validation đã đảm bảo, nhưng thêm check để an toàn
+    if (userData.first_name !== undefined && userData.first_name !== null && userData.first_name.trim().length > 0) {
+      updateData.firstName = userData.first_name.trim();
+    }
+    
+    // last_name: chỉ update nếu có giá trị hợp lệ (không null, không empty)
+    // Validation đã đảm bảo, nhưng thêm check để an toàn
+    if (userData.last_name !== undefined && userData.last_name !== null && userData.last_name.trim().length > 0) {
+      updateData.lastName = userData.last_name.trim();
+    }
+    
     if (userData.birth_date !== undefined) {
       updateData.birthDate = userData.birth_date ? new Date(userData.birth_date) : null;
     }

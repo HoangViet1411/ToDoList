@@ -10,8 +10,8 @@ export enum Gender {
 
 export interface UserAttributes {
   id: number;
-  firstName: string | null;
-  lastName: string | null;
+  firstName: string;
+  lastName: string; 
   birthDate: Date | null;
   gender: Gender | null;
   createdAt: Date;
@@ -26,8 +26,8 @@ interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'firstN
 
 class User extends Model<UserAttributes, UserCreationAttributes> implements UserAttributes {
   declare id: number;
-  declare firstName: string | null;
-  declare lastName: string | null;
+  declare firstName: string; 
+  declare lastName: string; 
   declare birthDate: Date | null;
   declare gender: Gender | null;
   declare readonly createdAt: Date;
@@ -47,12 +47,12 @@ User.init(
     },
     firstName: {
       type: DataTypes.STRING(100),
-      allowNull: true,
+      allowNull: false, // NOT NULL in database
       field: 'first_name',
     },
     lastName: {
       type: DataTypes.STRING(100),
-      allowNull: true,
+      allowNull: false, // NOT NULL in database
       field: 'last_name',
     },
     birthDate: {

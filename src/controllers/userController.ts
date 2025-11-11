@@ -15,7 +15,7 @@ export class UserController {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to create user';
-      res.status(400).json({
+      res.status(500).json({
         success: false,
         message,
       });
@@ -131,7 +131,7 @@ export class UserController {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update user';
-      res.status(400).json({
+      res.status(500).json({
         success: false,
         message,
       });

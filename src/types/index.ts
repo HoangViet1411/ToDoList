@@ -1,4 +1,5 @@
 import { Gender } from '../models/User';
+import type { RoleResponse } from './roleTypes';
 
 export interface CreateUserDto {
   first_name?: string;
@@ -6,6 +7,7 @@ export interface CreateUserDto {
   birth_date?: string;
   gender?: Gender;
   created_by?: number;
+  role_ids?: number[]; // Array of role IDs for N-N relationship
 }
 
 export interface UpdateUserDto {
@@ -14,6 +16,7 @@ export interface UpdateUserDto {
   birth_date?: string;
   gender?: Gender;
   updated_by?: number;
+  role_ids?: number[]; // Array of role IDs for N-N relationship
 }
 
 export interface UserResponse {
@@ -22,12 +25,13 @@ export interface UserResponse {
   lastName: string; // NOT NULL in database
   birthDate: Date | null;
   gender: Gender | null;
-  createdAt: Date;
-  createdBy: number | null;
-  updatedAt: Date;
-  updatedBy: number | null;
-  isDeleted: boolean;
-  deletedAt: Date | null;
+  createdAt?: Date;
+  createdBy?: number | null;
+  updatedAt?: Date;
+  updatedBy?: number | null;
+  isDeleted?: boolean;
+  deletedAt?: Date | null;
+  roles?: RoleResponse[]; // Include roles when loaded with associations
 }
 
 export interface PaginationMeta {
@@ -43,3 +47,9 @@ export interface PaginatedResponse<T> {
   data: T[];
   pagination: PaginationMeta;
 }
+
+// Export Role types from roleTypes.ts
+export type { CreateRoleDto, UpdateRoleDto, RoleResponse } from './roleTypes';
+
+// Export Product types from productTypes.ts
+export type { CreateProductDto, UpdateProductDto, ProductResponse } from './productTypes';

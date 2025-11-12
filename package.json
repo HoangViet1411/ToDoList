@@ -14,9 +14,11 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@types/morgan": "^1.9.10",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "joi": "^18.0.1",
+    "morgan": "^1.10.1",
     "mysql2": "^3.15.3",
     "sequelize": "^6.37.7"
   },
@@ -25,6 +27,7 @@
     "@types/joi": "^17.2.2",
     "@types/node": "^24.10.0",
     "nodemon": "^3.1.10",
+    "sequelize-cli": "^6.6.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }

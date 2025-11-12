@@ -15,7 +15,7 @@ router.post(
 // Get all users - VALIDATE QUERY
 router.get(
   '/',
-  validateQuery(paginationQuerySchema),
+  validateQuery(paginationQuerySchema), // Dynamic attributes/includes support
   userController.getAllUsers.bind(userController)
 );
 

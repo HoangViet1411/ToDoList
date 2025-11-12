@@ -74,7 +74,9 @@ export const validateQuery = (schema: Joi.ObjectSchema) => {
   return (req: Request, res: Response, next: NextFunction): void => {
     const { error, value } = schema.validate(req.query, {
       abortEarly: false,
-      convert: true, // Tự động convert string sang number
+      convert: true, // Tự động convert string sang number/boolean
+      allowUnknown: true, // Cho phép unknown fields (fields và include được xử lý riêng trong service)
+      stripUnknown: false, // Không xóa unknown fields để giữ fields và include
     });
 
     if (error) {

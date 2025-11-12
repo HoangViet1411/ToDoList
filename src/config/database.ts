@@ -15,7 +15,7 @@ export const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASS, {
   host: DB_HOST,
   port: DB_PORT,
   dialect: 'mysql',
-  // Bật logging global để log tất cả SQL queries
+  // Chỉ log SQL khi DB_LOG_SQL=true
   logging: DB_LOG_SQL
     ? (sql: string) => {
         console.log('\n                   SQL QUERY EXECUTION                     ');
@@ -23,7 +23,7 @@ export const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASS, {
         console.log('', sql);
         console.log('══════════════════════════════════════════════════════════════\n');
       }
-    : console.log, // Tạm thời dùng console.log để test (sẽ log tất cả queries)
+    : false,
   define: {
     timestamps: false,
     underscored: true,

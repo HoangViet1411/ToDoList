@@ -1,7 +1,11 @@
-import { Op } from 'sequelize';
+import { Op, type Transaction } from 'sequelize';
 import User, { type UserAttributes, Gender } from '../models/User';
+import Role from '../models/Role';
+import UserRole from '../models/UserRole';
 import type { CreateUserDto, UpdateUserDto, UserResponse, PaginatedResponse } from '../types';
-import { sequelize } from '../config/database';
+import { withTransaction } from '../config/transaction';
+import { buildAttributes, buildInclude, buildSearchCondition } from '../utils/query-builders';
+
 export interface UserFilterParams {
   search?: string;
   first_name?: string;
@@ -10,25 +14,91 @@ export interface UserFilterParams {
   birth_date_to?: string;
   gender?: Gender;
   include_deleted?: boolean;
+  fields?: string; // Comma-separated: "id,firstName,lastName"
+  include?: string; // Comma-separated: "roles,orders,orders.items"
 }
 
 export class UserService {
   async createUser(userData: CreateUserDto): Promise<UserResponse> {
-    // Validation đã đảm bảo first_name và last_name là required và không null
-    const user = await User.create({
-      firstName: userData.first_name!, // Non-null assertion vì validation đã đảm bảo
-      lastName: userData.last_name!, // Non-null assertion vì validation đã đảm bảo
-      birthDate: userData.birth_date ? new Date(userData.birth_date) : null,
-      gender: userData.gender ?? null,
-      createdBy: userData.created_by ?? null,
-      // is_deleted: false,
+    return withTransaction(async (t: Transaction) => {
+      // Validation đã đảm bảo first_name và last_name là required và không null
+      const user = await User.create(
+        {
+          firstName: userData.first_name!, // Non-null assertion vì validation đã đảm bảo
+          lastName: userData.last_name!, // Non-null assertion vì validation đã đảm bảo
+          birthDate: userData.birth_date ? new Date(userData.birth_date) : null,
+          gender: userData.gender ?? null,
+          createdBy: userData.created_by ?? null,
+        },
+        { transaction: t }
+      );
+
+      // Thêm roles nếu có
+      if (userData.role_ids && userData.role_ids.length > 0) {
+        // Loại bỏ duplicate role_ids để tránh lỗi unique constraint
+        const uniqueRoleIds = [...new Set(userData.role_ids)];
+        
+        const roles = await Role.findAll({
+          where: { id: uniqueRoleIds },
+          transaction: t,
+        });
+
+        // Kiểm tra xem tất cả role_ids có tồn tại không
+        if (roles.length !== uniqueRoleIds.length) {
+          const foundRoleIds = roles.map((r) => r.id);
+          const missingRoleIds = uniqueRoleIds.filter((id) => !foundRoleIds.includes(id));
+          throw new Error(`Roles with IDs [${missingRoleIds.join(', ')}] not found`);
+        }
+
+        // Tạo UserRole records trực tiếp (setRoles có vấn đề với transaction)
+        // Phải set timestamps manually vì bulkCreate trong transaction không tự set
+        const now = new Date();
+        await UserRole.bulkCreate(
+          roles.map((role) => ({
+            userId: user.id,
+            roleId: role.id,
+            createdAt: now,
+            updatedAt: now,
+          })),
+          { transaction: t }
+        );
+      }
+
+      // Return user ID để load lại sau khi commit
+      return user.id;
+    }).then(async (userId: number) => {
+      // Load roles để trả về (sau khi commit)
+      // Sử dụng LEFT JOIN (required: false) để lấy cả user không có role
+      const userWithRoles = await User.findByPk(userId, {
+        attributes: ['id', 'firstName', 'lastName', 'birthDate', 'gender'],
+        include: [{ 
+          model: Role, 
+          as: 'roles',
+          required: false, // LEFT JOIN - lấy cả user không có role
+          attributes: ['id', 'roleName'],
+        }],
+      });
+
+      if (!userWithRoles) {
+        throw new Error('User created but could not be retrieved');
+      }
+
+      return this.mapToUserResponse(userWithRoles);
     });
-    return this.mapToUserResponse(user);
   }
 
   async getUserById(id: number): Promise<UserResponse | null> {
     // Paranoid tự động filter deleted_at IS NULL
-    const user = await User.findByPk(id);
+    // Sử dụng LEFT JOIN (required: false) để lấy cả user không có role
+    const user = await User.findByPk(id, {
+      attributes: ['id', 'firstName', 'lastName', 'birthDate', 'gender'],
+      include: [{ 
+        model: Role, 
+        as: 'roles', 
+        required: false, // LEFT JOIN - lấy cả user không có role
+        attributes: ['id', 'roleName'],
+      }],
+    });
     return user ? this.mapToUserResponse(user) : null;
   }
 
@@ -50,22 +120,7 @@ export class UserService {
 
     // Filter by search (tìm trong cả firstname và lastname với OR)
     if (filters.search && filters.search.trim()) {
-      const searchTerm = `%${filters.search.trim()}%`;
-      whereConditions.push({
-        [Op.or]: [
-          sequelize.where(
-            sequelize.fn('CONCAT', 
-              sequelize.col('first_name'),  
-              ' ',                           
-              sequelize.col('last_name')     
-            ),
-            { [Op.like]: searchTerm }
-          ),
-
-          { firstName: { [Op.like]: searchTerm } },
-          { lastName: { [Op.like]: searchTerm } },
-        ],
-      });
+      whereConditions.push(buildSearchCondition(filters.search));
     }
 
     // Filter by first_name (có thể kết hợp với search)
@@ -120,17 +175,35 @@ export class UserService {
       whereClause = { [Op.and]: whereConditions };
     }
 
-    // Build query options
+    // Build attributes và includes từ query params
+    const attributes = buildAttributes(filters.fields);
+    const includeDefs = buildInclude(filters.include);
+
+    // Build query options với dynamic attributes và includes
     const queryOptions: {
       where?: Record<string, unknown>;
       order: Array<[string, string]>;
-      limit?: number;  // Optional để có thể không set khi limit=0
-      offset?: number; // Optional để có thể không set khi limit=0
+      limit?: number;
+      offset?: number;
       paranoid?: boolean;
+      attributes?: string[];
+      include?: any[];
+      distinct?: boolean;
     } = {
-      order: [['createdAt', 'DESC']],
+      order: [['id', 'DESC']],
       paranoid: filters.include_deleted === true ? false : true,
+      distinct: true, // Tránh count trùng khi JOIN
     };
+
+    // Chỉ thêm attributes nếu có (nếu không Sequelize sẽ SELECT *)
+    if (attributes) {
+      queryOptions.attributes = attributes;
+    }
+
+    // Chỉ thêm include nếu có
+    if (includeDefs) {
+      queryOptions.include = includeDefs;
+    }
 
     // Nếu limit=0, không áp dụng pagination
     // KHÔNG set limit và offset trong queryOptions → Sequelize sẽ KHÔNG thêm LIMIT vào SQL
@@ -149,57 +222,162 @@ export class UserService {
     // Dùng findAndCountAll để lấy cả data và count trong 1 query (hiệu quả hơn)
     const { rows: users, count: total } = await User.findAndCountAll(queryOptions);
 
-    // Nếu không có pagination, totalPages = 1 và limit = total
+    // Tính pagination
     const totalPages = noPagination ? 1 : Math.ceil(total / pageSize);
     const responseLimit = noPagination ? total : pageSize;
 
     return {
       data: users.map((user) => this.mapToUserResponse(user)),
-      pagination: {
-        page: noPagination ? 1 : pageNumber,
-        limit: responseLimit,
-        total,
-        totalPages,
-        hasNext: pageNumber < totalPages,
-        hasPrev: pageNumber > 1,
-      },
+      pagination: noPagination
+        ? {
+            page: 1,
+            limit: total,
+            total,
+            totalPages: 1,
+            hasNext: false,
+            hasPrev: false,
+          }
+        : {
+            page: pageNumber,
+            limit: responseLimit,
+            total,
+            totalPages,
+            hasNext: pageNumber < totalPages,
+            hasPrev: pageNumber > 1,
+          },
     };
   }
 
-  async updateUser(id: number, userData: UpdateUserDto): Promise<UserResponse | null> {
-    // Paranoid tự động filter deleted_at IS NULL
-    const user = await User.findByPk(id);
-    if (!user) {
-      return null;
+  async updateUser(
+    id: number, 
+    userData: UpdateUserDto,
+    opts?: { transaction?: Transaction }
+  ): Promise<UserResponse | null> {
+    // Nếu không có transaction từ bên ngoài, check user tồn tại trước để tránh tạo transaction không cần thiết
+    if (!opts?.transaction) {
+      const existingUser = await User.findByPk(id, { attributes: ['id'] });
+      if (!existingUser) {
+        return null;
+      }
     }
 
-    const updateData: Partial<UserAttributes> = {};
-    
-    // first_name: chỉ update nếu có giá trị hợp lệ (không null, không empty)
-    // Validation đã đảm bảo, nhưng thêm check để an toàn
-    if (userData.first_name !== undefined && userData.first_name !== null && userData.first_name.trim().length > 0) {
-      updateData.firstName = userData.first_name.trim();
-    }
-    
-    // last_name: chỉ update nếu có giá trị hợp lệ (không null, không empty)
-    // Validation đã đảm bảo, nhưng thêm check để an toàn
-    if (userData.last_name !== undefined && userData.last_name !== null && userData.last_name.trim().length > 0) {
-      updateData.lastName = userData.last_name.trim();
-    }
-    
-    if (userData.birth_date !== undefined) {
-      updateData.birthDate = userData.birth_date ? new Date(userData.birth_date) : null;
-    }
-    if (userData.gender !== undefined) updateData.gender = userData.gender;
-    if (userData.updated_by !== undefined) updateData.updatedBy = userData.updated_by;
+    const run = async (t: Transaction): Promise<number> => {
+      // Paranoid tự động filter deleted_at IS NULL
+      const user = await User.findByPk(id, { transaction: t });
+      if (!user) {
+        throw new Error('USER_NOT_FOUND'); // Dùng error để phân biệt với lỗi khác
+      }
 
-    await user.update(updateData);
-    return this.mapToUserResponse(user);
+      const updateData: Partial<UserAttributes> = {};
+      
+      // first_name: chỉ update nếu có giá trị hợp lệ (không null, không empty)
+      if (userData.first_name !== undefined && userData.first_name !== null && userData.first_name.trim().length > 0) {
+        updateData.firstName = userData.first_name.trim();
+      }
+      
+      // last_name: chỉ update nếu có giá trị hợp lệ (không null, không empty)
+      if (userData.last_name !== undefined && userData.last_name !== null && userData.last_name.trim().length > 0) {
+        updateData.lastName = userData.last_name.trim();
+      }
+      
+      if (userData.birth_date !== undefined) {
+        updateData.birthDate = userData.birth_date ? new Date(userData.birth_date) : null;
+      }
+      
+      if (userData.gender !== undefined) {
+        updateData.gender = userData.gender;
+      }
+      
+      if (userData.updated_by !== undefined) {
+        updateData.updatedBy = userData.updated_by;
+      }
+
+      // Chỉ update nếu có thay đổi
+      if (Object.keys(updateData).length > 0) {
+        await user.update(updateData, {
+          fields: Object.keys(updateData) as Array<keyof UserAttributes>,
+          transaction: t,
+        });
+      }
+
+      // Cập nhật roles nếu có
+      if (userData.role_ids !== undefined) {
+        // Xóa tất cả roles hiện tại trước
+        await UserRole.destroy({
+          where: { userId: user.id },
+          transaction: t,
+        });
+
+        // Thêm roles mới nếu có
+        if (userData.role_ids.length > 0) {
+          // Loại bỏ duplicate role_ids để tránh lỗi unique constraint
+          const uniqueRoleIds = [...new Set(userData.role_ids)];
+          
+          const roles = await Role.findAll({
+            where: { id: uniqueRoleIds },
+            transaction: t,
+          });
+
+          // Kiểm tra xem tất cả role_ids có tồn tại không
+          if (roles.length !== uniqueRoleIds.length) {
+            const foundRoleIds = roles.map((r) => r.id);
+            const missingRoleIds = uniqueRoleIds.filter((id) => !foundRoleIds.includes(id));
+            throw new Error(`Roles with IDs [${missingRoleIds.join(', ')}] not found`);
+          }
+
+          // Tạo UserRole records trực tiếp (giống createUser)
+          const now = new Date();
+          await UserRole.bulkCreate(
+            roles.map((role) => ({
+              userId: user.id,
+              roleId: role.id,
+              createdAt: now,
+              updatedAt: now,
+            })),
+            { transaction: t }
+          );
+        }
+      }
+
+      return user.id;
+    };
+
+    // Nếu đã có transaction từ bên ngoài, sử dụng nó; nếu không, tạo transaction mới
+    return (opts?.transaction ? run(opts.transaction) : withTransaction(run))
+      .then(async (userId: number) => {
+        // Load lại với roles (sau khi commit)
+        // Sử dụng LEFT JOIN (required: false) để lấy cả user không có role
+        const updatedUser = await User.findByPk(userId, {
+          attributes: ['id', 'firstName', 'lastName', 'birthDate', 'gender'],
+          include: [{ 
+            model: Role, 
+            as: 'roles',
+            required: false, // LEFT JOIN - lấy cả user không có role
+            attributes: ['id', 'roleName'],
+          }],
+        });
+
+        if (!updatedUser) {
+          throw new Error('User updated but could not be retrieved');
+        }
+
+        return this.mapToUserResponse(updatedUser);
+      })
+      .catch((error) => {
+        // Xử lý case user không tồn tại
+        if (error instanceof Error && error.message === 'USER_NOT_FOUND') {
+          return null;
+        }
+        throw error;
+      });
   }
 
   async deleteUser(id: number): Promise<boolean> {
     // Paranoid tự động filter deleted_at IS NULL
-    const user = await User.findByPk(id);
+    // Chỉ cần id để delete, không cần select nhiều fields
+    const user = await User.findByPk(id, {
+      attributes: ['id'],
+    });
     if (!user) {
       return false;
     }
@@ -211,7 +389,11 @@ export class UserService {
 
   async hardDeleteUser(id: number): Promise<boolean> {
     // Tìm cả record đã bị xóa (paranoid: false)
-    const user = await User.findByPk(id, { paranoid: false });
+    // Chỉ cần id để delete, không cần select nhiều fields
+    const user = await User.findByPk(id, { 
+      paranoid: false,
+      attributes: ['id'],
+    });
     if (!user) {
       return false;
     }
@@ -223,27 +405,38 @@ export class UserService {
 
   async restoreUser(id: number): Promise<boolean> {
     // Tìm cả user đã bị xóa (paranoid: false)
-    const user = await User.findByPk(id, { paranoid: false });
+    // Cần deletedAt để check xem user có đang bị xóa không
+    const user = await User.findByPk(id, { 
+      paranoid: false,
+      attributes: ['id', 'deletedAt'],
+    });
     if (!user) {
-      console.log(`Restore failed: User with id ${id} not found`);
       return false;
     }
 
     // Kiểm tra user có đang bị xóa không (deletedAt !== null)
     if (!user.deletedAt) {
-      console.log(`Restore failed: User with id ${id} is not deleted`);
       return false; // User chưa bị xóa
     }
 
     // Restore user - Sequelize tự động set deleted_at = NULL
     await user.restore();
-    console.log(`User ${id} restored successfully`);
     return true;
   }
 
   private mapToUserResponse(user: User): UserResponse {
     // Sequelize tự động map tất cả các field từ model instance sang plain object
-    return user.get({ plain: true }) as UserResponse;
+    // Vì đã dùng attributes trong query, plainUser chỉ chứa các field đã được select
+    const plainUser = user.get({ plain: true }) as any;
+    return {
+      ...plainUser, 
+      roles: plainUser.roles && Array.isArray(plainUser.roles)
+        ? plainUser.roles.map((role: any) => ({
+            id: role.id,
+            roleName: role.roleName,
+          }))
+        : [], // Override roles để chỉ lấy id và roleName
+    };
   }
 }
 

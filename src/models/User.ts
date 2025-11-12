@@ -18,11 +18,10 @@ export interface UserAttributes {
   createdBy: number | null;
   updatedAt: Date;
   updatedBy: number | null;
-  isDeleted: boolean;
   deletedAt: Date | null;
 }
 
-interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'firstName' | 'lastName' | 'birthDate' | 'gender' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy' | 'isDeleted'> {}
+interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'firstName' | 'lastName' | 'birthDate' | 'gender' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy'> {}
 
 class User extends Model<UserAttributes, UserCreationAttributes> implements UserAttributes {
   declare id: number;
@@ -34,7 +33,6 @@ class User extends Model<UserAttributes, UserCreationAttributes> implements User
   declare createdBy: number | null;
   declare readonly updatedAt: Date;
   declare updatedBy: number | null;
-  declare isDeleted: boolean;
   declare deletedAt: Date | null;
 }
 
@@ -85,12 +83,6 @@ User.init(
       type: DataTypes.INTEGER.UNSIGNED,
       allowNull: true,
       field: 'updated_by',
-    },
-    isDeleted: {
-      type: DataTypes.BOOLEAN,
-      allowNull: false,
-      defaultValue: false,
-      field: 'is_deleted',
     },
     deletedAt: {
       type: DataTypes.DATE,

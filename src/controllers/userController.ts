@@ -15,9 +15,10 @@ export class UserController {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to create user';
+      console.error('Error creating user:', error);
       res.status(500).json({
         success: false,
-        message,
+        message: message || 'Failed to create user',
       });
     }
   }
@@ -56,7 +57,7 @@ export class UserController {
       const validatedQuery = req.validatedQuery || req.query;
       const page = (validatedQuery['page'] as unknown as number) ?? 1;
       const limit = (validatedQuery['limit'] as unknown as number) ?? 10;
-
+      console.log('validatedQuery', validatedQuery);
       // Extract filter parameters (chỉ thêm vào object nếu có giá trị)
       const filters: {
         search?: string;
@@ -66,6 +67,8 @@ export class UserController {
         birth_date_to?: string;
         gender?: Gender;
         include_deleted?: boolean;
+        fields?: string;
+        include?: string;
       } = {};
 
       if (validatedQuery['search'] && typeof validatedQuery['search'] === 'string') {
@@ -92,6 +95,13 @@ export class UserController {
       if (validatedQuery['include_deleted'] !== undefined) {
         filters.include_deleted =
           validatedQuery['include_deleted'] === true || validatedQuery['include_deleted'] === 'true';
+      }
+      // Dynamic query options
+      if (validatedQuery['fields'] && typeof validatedQuery['fields'] === 'string') {
+        filters.fields = validatedQuery['fields'];
+      }
+      if (validatedQuery['include'] && typeof validatedQuery['include'] === 'string') {
+        filters.include = validatedQuery['include'];
       }
 
       const result = await userService.getAllUsers(page, limit, filters);
@@ -131,9 +141,10 @@ export class UserController {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update user';
+      console.error('Error updating user:', error);
       res.status(500).json({
         success: false,
-        message,
+        message: message || 'Failed to update user',
       });
     }
   }

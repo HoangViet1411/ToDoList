@@ -1,9 +1,15 @@
 import dotenv from 'dotenv';
+import path from 'path';
+
+// Load environment variables FIRST
+// Luôn tải đúng .env dù chạy từ đâu
+// Với CommonJS, __dirname sẽ có sẵn sau khi compile
+// Hoặc dùng process.cwd() để lấy thư mục hiện tại
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+
 import app from './app';
 import { sequelize } from './config/database';
-
-// Load environment variables
-dotenv.config();
+import './models';
 
 const PORT = Number.parseInt(process.env['PORT'] ?? '3000', 10);
 
@@ -14,9 +20,21 @@ async function startServer(): Promise<void> {
     await sequelize.authenticate();
     console.log(' Database connection established successfully.');
 
-    // Sync database (in production, use migrations instead)
-    // await sequelize.sync({ alter: true });
-    // console.log(' Database synced successfully.');
+    // Sync database - chỉ khi có flag SYNC_DB=true trong .env
+    // Sau khi đã tạo xong bảng, set SYNC_DB=false hoặc xóa flag để tắt sync
+    const shouldSync = process.env['SYNC_DB'] === 'true';
+    
+    if (shouldSync) {
+      // Tạo bảng nếu chưa tồn tại, và alter schema nếu có thay đổi
+      // force: false - không xóa bảng hiện có
+      // alter: true - tự động thêm/sửa columns khi model thay đổi
+      await sequelize.sync({ force: false, alter: true });
+      console.log(' Database synced successfully. All tables are ready.');
+      console.log(' 💡 Tip: Set SYNC_DB=false in .env to skip sync on next run');
+    } else {
+      // Không sync - bảng đã được tạo, chỉ kiểm tra connection
+      console.log(' Skipping database sync (set SYNC_DB=false in .env to disable)');
+    }
 
     // Start server
     app.listen(PORT, () => {

@@ -1,9 +1,12 @@
 import express, { type Express } from 'express';
+import morgan from 'morgan';
 import userRoutes from './routes/userRoutes';
+import roleRoutes from './routes/roleRoutes';
 
 const app: Express = express();
 
 // Middleware
+app.use(morgan('dev')); // Log HTTP requests
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -14,6 +17,7 @@ app.get('/health', (_req, res) => {
 
 // Routes
 app.use('/api/users', userRoutes);
+app.use('/api/roles', roleRoutes);
 
 export default app;
 

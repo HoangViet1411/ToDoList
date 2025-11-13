@@ -2,6 +2,8 @@ import express, { type Express } from 'express';
 import morgan from 'morgan';
 import userRoutes from './routes/userRoutes';
 import roleRoutes from './routes/roleRoutes';
+import productRoutes from './routes/productRoutes';
+import orderRoutes from './routes/orderRoutes';
 
 const app: Express = express();
 
@@ -18,6 +20,8 @@ app.get('/health', (_req, res) => {
 // Routes
 app.use('/api/users', userRoutes);
 app.use('/api/roles', roleRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/orders', orderRoutes);
 
 export default app;
 

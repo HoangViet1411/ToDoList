@@ -10,6 +10,7 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 import app from './app';
 import { sequelize } from './config/database';
 import './models';
+import { applyOrderTriggers, checkTriggersExist } from './utils/database-triggers';
 
 const PORT = Number.parseInt(process.env['PORT'] ?? '3000', 10);
 
@@ -34,6 +35,21 @@ async function startServer(): Promise<void> {
     } else {
       // Không sync - bảng đã được tạo, chỉ kiểm tra connection
       console.log(' Skipping database sync (set SYNC_DB=false in .env to disable)');
+    }
+
+    // Apply database triggers - chỉ khi có flag APPLY_TRIGGERS=true trong .env
+    const shouldApplyTriggers = process.env['APPLY_TRIGGERS'] === 'true';
+    
+    if (shouldApplyTriggers) {
+      const triggersExist = await checkTriggersExist();
+      if (!triggersExist) {
+        console.log(' Applying order triggers...');
+        await applyOrderTriggers();
+      } else {
+        console.log(' Order triggers already exist. Skipping...');
+      }
+    } else {
+      console.log(' Skipping trigger application (set APPLY_TRIGGERS=true in .env to enable)');
     }
 
     // Start server

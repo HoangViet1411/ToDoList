@@ -1,7 +1,7 @@
 import Product, { ProductAttributes } from "../models/Product";
 import { Op } from "sequelize";
 import type { CreateProductDto, UpdateProductDto, ProductResponse, PaginatedResponse } from "../types";
-import { sequelize } from "../config/database";
+import { buildProductAttributes, buildInclude } from "../utils/query-builders";
 
 export interface ProductFilterParams {
     search?: string;
@@ -11,10 +11,14 @@ export interface ProductFilterParams {
     price_to?: number;
     category_id?: number;
     include_deleted?: boolean;
+    fields?: string; // Comma-separated: "id,name,price"
+    include?: string; // Comma-separated: "category" (nếu có trong tương lai)
 }
 
 export class ProductService {
     async createProduct(productData: CreateProductDto): Promise<ProductResponse> {
+        // Sequelize.create() tự động return instance với đầy đủ fields
+        // Không cần query lại, chỉ cần map response
         const product = await Product.create({
             name: productData.name!,
             description: productData.description !== undefined ? productData.description : null,
@@ -22,12 +26,7 @@ export class ProductService {
             quantity: productData.quantity ?? 0,
         });
 
-        // Load lại với attributes để chỉ select các cột cần thiết
-        const createdProduct = await Product.findByPk(product.id, {
-            attributes: ['id', 'name', 'price', 'description', 'quantity'],
-        });
-
-        return this.mapToProductResponse(createdProduct!);
+        return this.mapToProductResponse(product);
     }
 
     async getProductById(id: number): Promise<ProductResponse | null> {
@@ -81,22 +80,16 @@ export class ProductService {
             });
         }
 
-        // Filter by price_from (từ giá này trở lên)
-        if (filters.price_from !== undefined && filters.price_from !== null) {
-            whereConditions.push({
-                price: {
-                    [Op.gte]: filters.price_from,
-                },
-            });
-        }
-
-        // Filter by price_to (đến giá này)
-        if (filters.price_to !== undefined && filters.price_to !== null) {
-            whereConditions.push({
-                price: {
-                    [Op.lte]: filters.price_to,
-                },
-            });
+        // Filter by price (combine price_from và price_to thành 1 condition)
+        if (filters.price_from !== undefined || filters.price_to !== undefined) {
+            const priceCondition: any = {};
+            if (filters.price_from !== undefined && filters.price_from !== null) {
+                priceCondition[Op.gte] = filters.price_from;
+            }
+            if (filters.price_to !== undefined && filters.price_to !== null) {
+                priceCondition[Op.lte] = filters.price_to;
+            }
+            whereConditions.push({ price: priceCondition });
         }
 
         // Kết hợp tất cả điều kiện với AND
@@ -108,7 +101,11 @@ export class ProductService {
             whereClause = { [Op.and]: whereConditions };
         }
 
-        // Build query options
+        // Build attributes và includes từ query params
+        const attributes = buildProductAttributes(filters.fields);
+        const includeDefs = buildInclude(filters.include);
+
+        // Build query options với dynamic attributes và includes
         const queryOptions: {
             where?: Record<string, unknown>;
             order: Array<[string, string]>;
@@ -116,11 +113,27 @@ export class ProductService {
             offset?: number;
             paranoid?: boolean;
             attributes?: string[];
+            include?: any[];
+            distinct?: boolean;
         } = {
-            attributes: ['id', 'name', 'price', 'description', 'quantity'],
             order: [['id', 'DESC']], // Order by id DESC (tương đương createdAt DESC vì id là auto increment)
             paranoid: filters.include_deleted === true ? false : true,
         };
+
+        // Chỉ thêm distinct khi có JOIN (tránh count trùng)
+        if (includeDefs && includeDefs.length > 0) {
+            queryOptions.distinct = true;
+        }
+
+        // Chỉ thêm attributes nếu có (nếu không Sequelize sẽ SELECT *)
+        if (attributes) {
+            queryOptions.attributes = attributes;
+        }
+
+        // Chỉ thêm include nếu có
+        if (includeDefs) {
+            queryOptions.include = includeDefs;
+        }
 
         // Nếu limit=0, không áp dụng pagination
         if (!noPagination) {
@@ -154,96 +167,67 @@ export class ProductService {
     }
 
     async updateProduct(id: number, productData: UpdateProductDto): Promise<ProductResponse | null> {
-        // Sử dụng transaction để đảm bảo tính nguyên tử
-        const transaction = await sequelize.transaction();
+        // Paranoid tự động filter deleted_at IS NULL
+        const product = await Product.findByPk(id);
+        if (!product) {
+            return null;
+        }
 
-        try {
-            // Paranoid tự động filter deleted_at IS NULL
-            const product = await Product.findByPk(id, { transaction });
-            if (!product) {
-                await transaction.rollback();
-                return null;
-            }
+        const updateData: Partial<ProductAttributes> = {};
 
-            const updateData: Partial<ProductAttributes> = {};
+        // name: chỉ update nếu có giá trị hợp lệ
+        if (productData.name !== undefined && productData.name !== null && productData.name.trim().length > 0) {
+            updateData.name = productData.name.trim();
+        }
 
-            // name: chỉ update nếu có giá trị hợp lệ
-            if (productData.name !== undefined && productData.name !== null && productData.name.trim().length > 0) {
-                updateData.name = productData.name.trim();
-            }
+        // price: chỉ update nếu có giá trị hợp lệ (>= 0)
+        if (productData.price !== undefined && productData.price !== null && productData.price >= 0) {
+            updateData.price = productData.price;
+        }
 
-            // price: chỉ update nếu có giá trị hợp lệ (>= 0)
-            if (productData.price !== undefined && productData.price !== null && productData.price >= 0) {
-                updateData.price = productData.price;
-            }
+        // description: có thể set null hoặc string
+        if (productData.description !== undefined) {
+            updateData.description = productData.description || null;
+        }
 
-            // description: có thể set null hoặc string
-            if (productData.description !== undefined) {
-                updateData.description = productData.description || null;
-            }
+        // quantity: chỉ update nếu có giá trị hợp lệ (>= 0)
+        if (productData.quantity !== undefined && productData.quantity !== null && productData.quantity >= 0) {
+            updateData.quantity = productData.quantity;
+        }
 
-            // quantity: chỉ update nếu có giá trị hợp lệ (>= 0)
-            if (productData.quantity !== undefined && productData.quantity !== null && productData.quantity >= 0) {
-                updateData.quantity = productData.quantity;
-            }
-
-            // Chỉ update nếu có thay đổi
-            if (Object.keys(updateData).length > 0) {
-                await product.update(updateData, {
-                    fields: Object.keys(updateData) as Array<keyof ProductAttributes>,
-                    transaction,
-                });
-            }
-
-            // Commit transaction
-            await transaction.commit();
-
-            // Load lại với attributes để chỉ select các cột cần thiết
-            const updatedProduct = await Product.findByPk(id, {
+        // Chỉ update nếu có thay đổi
+        if (Object.keys(updateData).length > 0) {
+            await product.update(updateData, {
+                fields: Object.keys(updateData) as Array<keyof ProductAttributes>,
+            });
+            // Reload với attributes cần thiết thay vì query lại
+            await product.reload({
                 attributes: ['id', 'name', 'price', 'description', 'quantity'],
             });
-
-            if (!updatedProduct) {
-                throw new Error('Failed to load updated product');
-            }
-
-            return this.mapToProductResponse(updatedProduct);
-        } catch (error) {
-            // Rollback transaction nếu có lỗi
-            await transaction.rollback();
-            throw error;
         }
+
+        return this.mapToProductResponse(product);
     }
 
     async deleteProduct(id: number): Promise<boolean> {
+        // Dùng destroy() trực tiếp với where condition - chỉ 1 query thay vì 2
         // Paranoid tự động filter deleted_at IS NULL
-        // Chỉ cần id để delete, không cần select nhiều fields
-        const product = await Product.findByPk(id, {
-            attributes: ['id'],
+        const deletedCount = await Product.destroy({
+            where: { id },
+            limit: 1, // Chỉ xóa 1 record
         });
-        if (!product) {
-            return false;
-        }
-
-        // Soft delete - Sequelize tự động set deleted_at = NOW()
-        await product.destroy();
-        return true;
+        return deletedCount > 0;
     }
 
     async hardDeleteProduct(id: number): Promise<boolean> {
+        // Dùng destroy() trực tiếp với where condition - chỉ 1 query thay vì 2
         // Tìm cả record đã bị xóa (paranoid: false)
-        // Chỉ cần id để delete, không cần select nhiều fields
-        const product = await Product.findByPk(id, {
-            paranoid: false,
-            attributes: ['id'],
+        const deletedCount = await Product.destroy({
+            where: { id },
+            limit: 1, // Chỉ xóa 1 record
+            force: true, // Hard delete - xóa thật khỏi database
         });
-        if (!product) {
-            return false;
-        }
-
-        // Hard delete - xóa thật khỏi database
-        await product.destroy({ force: true });
-        return true;
+        return deletedCount > 0;
     }
 
     async restoreProduct(id: number): Promise<boolean> {

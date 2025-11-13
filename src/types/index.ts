@@ -53,3 +53,12 @@ export type { CreateRoleDto, UpdateRoleDto, RoleResponse } from './roleTypes';
 
 // Export Product types from productTypes.ts
 export type { CreateProductDto, UpdateProductDto, ProductResponse } from './productTypes';
+
+// Export Order types from orderTypes.ts
+export type {
+  CreateOrderDto,
+  CreateOrderItemDto,
+  UpdateOrderDto,
+  OrderResponse,
+  OrderDetailResponse,
+} from './orderTypes';

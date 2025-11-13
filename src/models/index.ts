@@ -36,7 +36,7 @@ Order.belongsTo(User, {
 // Order - OrderDetail (1-N)
 Order.hasMany(OrderDetail, {
   foreignKey: 'order_id',
-  as: 'orderDetails',
+  as: 'items', // Đổi từ 'orderDetails' thành 'items' để khớp với service và API response
 });
 
 OrderDetail.belongsTo(Order, {

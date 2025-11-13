@@ -77,6 +77,55 @@ Product.init(
     timestamps: true,
     underscored: true,
     paranoid: true,
+    indexes: [
+      // Index 1: Price index - QUAN TRỌNG NHẤT
+      // Dùng cho: WHERE price >= X AND price <= Y (range queries)
+      // Range queries rất hiệu quả với B-tree index trên numeric column
+      // Cải thiện performance đáng kể khi filter theo giá
+      {
+        name: 'idx_products_price',
+        fields: ['price'],
+      },
+      
+      // Index 2: Name index
+      // Dùng cho: WHERE name LIKE '%...%' và filter by name
+      // Mặc dù LIKE với wildcard ở đầu không dùng index tốt nhất,
+      // nhưng vẫn hữu ích cho exact match và một số trường hợp prefix search
+      {
+        name: 'idx_products_name',
+        fields: ['name'],
+      },
+      
+      // Index 3: Composite index (price, deleted_at) - TỐI ƯU NHẤT
+      // Dùng cho: WHERE price >= X AND deleted_at IS NULL
+      // Composite index này cover cả 2 điều kiện trong 1 index
+      // Rất hiệu quả vì thường query price kèm paranoid check
+      // MySQL có thể dùng index này để filter cả price và deleted_at cùng lúc
+      {
+        name: 'idx_products_price_deleted',
+        fields: ['price', 'deleted_at'],
+      },
+      
+      // Index 4: Composite index (name, deleted_at)
+      // Dùng cho: WHERE name LIKE '%...%' AND deleted_at IS NULL
+      // Tương tự index 3, nhưng cho name filter
+      // Hữu ích khi search/filter name kèm paranoid check
+      {
+        name: 'idx_products_name_deleted',
+        fields: ['name', 'deleted_at'],
+      },
+      
+      // Index 5: FULLTEXT index cho search
+      // Dùng cho: MATCH(name, description) AGAINST('search term')
+      // Tối ưu cho full-text search trong name và description
+      // Lưu ý: Chỉ hoạt động với InnoDB (MySQL 5.6.4+) hoặc MyISAM
+      // Nếu MySQL version < 5.6.4, index này sẽ bị bỏ qua khi sync
+      {
+        name: 'idx_products_fulltext',
+        type: 'FULLTEXT',
+        fields: ['name', 'description'],
+      },
+    ],
   }
 );
 

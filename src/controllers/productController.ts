@@ -65,6 +65,8 @@ export class ProductController {
         price_to?: number;
         category_id?: number;
         include_deleted?: boolean;
+        fields?: string;
+        include?: string;
       } = {};
 
       if (validatedQuery['search'] && typeof validatedQuery['search'] === 'string') {
@@ -97,6 +99,13 @@ export class ProductController {
       if (validatedQuery['include_deleted'] !== undefined) {
         filters.include_deleted =
           validatedQuery['include_deleted'] === true || validatedQuery['include_deleted'] === 'true';
+      }
+      // Dynamic query options
+      if (validatedQuery['fields'] && typeof validatedQuery['fields'] === 'string') {
+        filters.fields = validatedQuery['fields'];
+      }
+      if (validatedQuery['include'] && typeof validatedQuery['include'] === 'string') {
+        filters.include = validatedQuery['include'];
       }
 
       const result = await productService.getAllProducts(page, limit, filters);

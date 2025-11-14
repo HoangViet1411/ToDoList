@@ -2,56 +2,65 @@ import { Router } from 'express';
 import roleController from '../controllers/roleController';
 import { validate, validateParams, validateQuery } from '../middleware/validation';
 import { createRoleSchema, updateRoleSchema, idParamSchema, paginationQuerySchema } from '../validations/roleValidation';
+import { authenticateToken } from '../middleware/auth';
+import { requireAdmin } from '../middleware/authorize';
 
 const router = Router();
 
-// Create a new role
+// Middleware chains để tránh lặp lại
+const authAdmin = [authenticateToken, requireAdmin];
+const authAdminWithParams = [authenticateToken, requireAdmin, validateParams(idParamSchema)];
+
+// Create a new role - AUTHENTICATE TOKEN + ADMIN ONLY + VALIDATE BODY
 router.post(
   '/',
+  ...authAdmin,
   validate(createRoleSchema),
   roleController.createRole.bind(roleController)
 );
 
-// Get all roles
+// Get all roles - AUTHENTICATE TOKEN + VALIDATE QUERY
 router.get(
   '/',
+  authenticateToken,
   validateQuery(paginationQuerySchema),
   roleController.getAllRoles.bind(roleController)
 );
 
-// Get role by ID
+// Get role by ID - AUTHENTICATE TOKEN + VALIDATE PARAMS
 router.get(
   '/:id',
+  authenticateToken,
   validateParams(idParamSchema),
   roleController.getRoleById.bind(roleController)
 );
 
-// Update role by ID
+// Update role by ID - AUTHENTICATE TOKEN + ADMIN ONLY + VALIDATE PARAMS + BODY
 router.put(
   '/:id',
-  validateParams(idParamSchema),
+  ...authAdminWithParams,
   validate(updateRoleSchema),
   roleController.updateRole.bind(roleController)
 );
 
-// Restore role by ID
+// Restore role by ID - AUTHENTICATE TOKEN + ADMIN ONLY + VALIDATE PARAMS
 router.post(
   '/:id/restore',
-  validateParams(idParamSchema),
+  ...authAdminWithParams,
   roleController.restoreRole.bind(roleController)
 );
 
-// Hard delete role by ID
+// Hard delete role by ID - AUTHENTICATE TOKEN + ADMIN ONLY + VALIDATE PARAMS
 router.delete(
   '/:id/hard',
-  validateParams(idParamSchema),
+  ...authAdminWithParams,
   roleController.hardDeleteRole.bind(roleController)
 );
 
-// Soft delete role by ID
+// Soft delete role by ID - AUTHENTICATE TOKEN + ADMIN ONLY + VALIDATE PARAMS
 router.delete(
   '/:id',
-  validateParams(idParamSchema),
+  ...authAdminWithParams,
   roleController.deleteRole.bind(roleController)
 );
 
